@@ -115,7 +115,7 @@ script addresses it by IP, so a lease change would otherwise silently break it.
 ### 3. Install the scripts
 
 ```bash
-git clone https://github.com/<you>/ulanzi-claude-status.git
+git clone https://github.com/pp84/ulanzi-claude-status.git
 cd ulanzi-claude-status
 cp status-light.sh claude-ticker.sh claude-usage.sh display-power.sh ~/.claude/
 chmod +x ~/.claude/{status-light,claude-ticker,claude-usage,display-power}.sh
