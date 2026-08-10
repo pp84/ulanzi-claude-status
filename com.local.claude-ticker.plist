@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.claude-ticker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <!-- launchd does not expand ~ or $HOME: replace CHANGE_ME with your macOS
+         short username, e.g. /Users/alex/.claude/claude-ticker.sh -->
+    <string>/Users/CHANGE_ME/.claude/claude-ticker.sh</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>15</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/tmp/claude-ticker.out</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/claude-ticker.err</string>
+</dict>
+</plist>

@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/status-light.sh blue" }] }],
+    "PostToolUse":      [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/status-light.sh blue" }] }],
+    "Notification": [
+      { "matcher": "idle_prompt",                      "hooks": [{ "type": "command", "command": "$HOME/.claude/status-light.sh green" }] },
+      { "matcher": "permission_prompt|elicitation_dialog", "hooks": [{ "type": "command", "command": "$HOME/.claude/status-light.sh red" }] }
+    ],
+    "Stop":       [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/status-light.sh green" }] }],
+    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "$HOME/.claude/status-light.sh end" }] }]
+  }
+}

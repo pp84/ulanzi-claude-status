@@ -1,0 +1,12 @@
+# Local Claude Code workspace state (contains machine-specific permissions/env)
+.claude/
+
+# tokensave local index
+.tokensave/
+
+# Your device address / quiet hours live here, outside the repo
+ulanzi.conf
+
+.DS_Store
+__pycache__/
+*.pyc

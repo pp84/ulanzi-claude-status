@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<!--
+  control.html - a tiny control panel for an Ulanzi TC001 running AWTRIX 3.
+
+  The stock AWTRIX web UI is config-only (WiFi/MQTT/Files/...) and has no
+  brightness or app controls. This single self-contained page fills that gap:
+  brightness, auto-brightness, app dwell time, transitions, notification
+  dismiss, and a live status readout.
+
+  Install: open http://<device-ip>/edit, upload this file to the root folder,
+  then visit http://<device-ip>/control.html. Serving it FROM the device means
+  the /api calls are same-origin, so there are no browser CORS problems.
+
+  (You can also open it straight from disk - it will fall back to the IP in the
+  box below - but some browsers block cross-origin POSTs to the device, which is
+  why uploading to the clock is the recommended path.)
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TC001 Control</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font: 15px/1.45 system-ui, sans-serif; margin: 0; background: #0d0f14; color: #e6e9ef; }
+  main { max-width: 460px; margin: 0 auto; padding: 22px 18px 60px; }
+  h1 { font-size: 18px; letter-spacing: .04em; margin: 0 0 4px; }
+  .sub { color: #8b93a7; font-size: 13px; margin: 0 0 22px; }
+  .card { background: #161a23; border: 1px solid #232838; border-radius: 12px; padding: 16px; margin: 0 0 14px; }
+  label { display: block; font-weight: 600; margin: 0 0 8px; }
+  .row { display: flex; align-items: center; gap: 12px; }
+  input[type=range] { flex: 1; accent-color: #ff7a00; }
+  input[type=number], input[type=text], input[type=date] { width: 84px; background: #0d0f14; color: #e6e9ef; border: 1px solid #2c3245; border-radius: 7px; padding: 6px 8px; font: inherit; }
+  .val { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; color: #ff9a3c; font-weight: 700; }
+  button { background: #232838; color: #e6e9ef; border: 1px solid #313850; border-radius: 8px; padding: 9px 12px; font: inherit; cursor: pointer; }
+  button:hover { background: #2c3245; }
+  button.primary { background: #ff7a00; border-color: #ff7a00; color: #1a1206; font-weight: 700; }
+  .btns { display: flex; flex-wrap: wrap; gap: 8px; }
+  #nativeToggles button, #managedToggles button, #customChips button { text-transform: uppercase; letter-spacing: .03em; }
+  .switch { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; font-size: 13px; }
+  .stats span { color: #8b93a7; } .stats b { color: #e6e9ef; font-weight: 600; }
+  /* Screen tiles: a live 32x8 preview above the name, same aspect as the panel. */
+  .screens { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  button.screen { display: block; width: 100%; padding: 6px; background: #0d0f14; border: 1px solid #232838; border-radius: 9px; text-align: center; }
+  button.screen:hover { background: #10131a; border-color: #2c3245; }
+  button.screen.on { border-color: #ff7a00; }
+  .screen canvas { display: block; width: 100%; height: auto; border-radius: 4px; image-rendering: pixelated; background: #000; }
+  .screen .nm { display: block; margin-top: 5px; font-size: 11px; color: #8b93a7; }
+  .screen.on .nm { color: #ff9a3c; font-weight: 700; }
+  .tile { position: relative; }
+  button.gear { position: absolute; top: 3px; right: 3px; padding: 0; width: 20px; height: 20px; line-height: 18px;
+                font-size: 12px; border-radius: 5px; background: #0d0f14cc; border-color: #313850; color: #8b93a7; }
+  button.gear:hover { color: #ff9a3c; border-color: #ff7a00; }
+  .cfg { grid-column: 1 / -1; background: #10131a; border: 1px solid #2c3245; border-radius: 9px; padding: 12px; }
+  .cfgrow { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #8b93a7; margin: 0 0 8px; }
+  .cfgrow input { width: 92px; }
+  .hint { font-size: 12px; color: #6c7385; }
+  #toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); background: #232838; border: 1px solid #313850; padding: 8px 14px; border-radius: 8px; opacity: 0; transition: opacity .2s; pointer-events: none; font-size: 13px; }
+  #toast.show { opacity: 1; }
+  .ipbar { display: flex; gap: 8px; align-items: center; margin: 0 0 16px; font-size: 13px; color: #8b93a7; }
+</style>
+</head>
+<body>
+<main>
+  <h1>TC001 CONTROL</h1>
+  <p class="sub">Ulanzi TC001 &middot; AWTRIX 3 &middot; runtime settings the stock web UI doesn't expose.</p>
+
+  <div class="ipbar">
+    Device <input type="text" id="ip" placeholder="192.168.1.100">
+    <button onclick="refresh()">Connect</button>
+  </div>
+
+  <div class="card">
+    <label>Brightness <span style="font-weight:400;color:#8b93a7">(0&ndash;255)</span></label>
+    <div class="row">
+      <input type="range" id="bri" min="0" max="255" value="120" oninput="briVal.textContent=this.value">
+      <span class="val" id="briVal">120</span>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button class="primary" onclick="setBri()">Apply brightness</button>
+    </div>
+    <div class="switch" style="margin-top:14px">
+      <label style="margin:0">Auto-brightness (light sensor)</label>
+      <div class="btns">
+        <button onclick="setAuto(true)">On</button>
+        <button onclick="setAuto(false)">Off</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>App rotation</label>
+    <div class="row" style="margin-bottom:10px">
+      <span style="flex:1">Default seconds per app (ATIME)<br><small style="color:#6c7385">applies to apps with no duration of their own &mdash; per-screen overrides live in Screens</small></span>
+      <input type="number" id="atime" min="1" max="60" value="7">
+      <button onclick="setNum('ATIME','atime')">Set</button>
+    </div>
+    <div class="row">
+      <span style="flex:1">Transition ms (TSPEED)</span>
+      <input type="number" id="tspeed" min="0" max="2000" step="50" value="400">
+      <button onclick="setNum('TSPEED','tspeed')">Set</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Display</label>
+    <div class="btns">
+      <button onclick="dismiss()">Dismiss notification</button>
+      <button onclick="post('/api/power',{power:true})">Screen on</button>
+      <button onclick="post('/api/power',{power:false})">Screen off</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <label>Screens <button style="float:right;padding:4px 8px" onclick="refreshLoop()">&#x21bb;</button></label>
+    <div id="loop" style="font-size:13px;color:#8b93a7;margin:0 0 12px">&hellip;</div>
+    <div class="btns" id="nativeToggles" style="margin:0 0 8px"></div>
+    <div class="btns" id="applyNative" style="margin:0 0 12px"></div>
+    <div class="screens" id="managedToggles" style="margin:0 0 12px"></div>
+    <div class="btns" id="customChips" style="margin:0 0 12px"></div>
+  </div>
+
+  <div class="card">
+    <label>Status <button style="float:right;padding:4px 8px" onclick="refresh()">&#x21bb;</button></label>
+    <div class="stats" id="stats"><span>not connected</span></div>
+  </div>
+</main>
+<div id="toast"></div>
+
+<script>
+  // Base URL: "" when served from the device (same-origin, no CORS). When opened
+  // from disk, fall back to the IP typed in the box.
+  const servedFromDevice = location.protocol === 'http:' && location.hostname;
+  const ipBox = document.getElementById('ip');
+  ipBox.value = servedFromDevice ? location.hostname : '192.168.1.100';
+
+  function base() { return servedFromDevice ? '' : 'http://' + ipBox.value.trim(); }
+  function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1600); }
+
+  async function post(path, body) {
+    try {
+      const r = await fetch(base() + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      toast(r.ok ? 'OK' : 'HTTP ' + r.status);
+      setTimeout(refresh, 400);
+    } catch (e) { toast('failed: ' + e.message); }
+  }
+
+  const setBri  = () => post('/api/settings', { ABRI: false, BRI: +document.getElementById('bri').value });
+  const setAuto = on => post('/api/settings', { ABRI: on });
+  const setNum  = (key, id) => post('/api/settings', { [key]: +document.getElementById(id).value });
+  const dismiss = () => post('/api/notify/dismiss', {});
+
+  // --- Screens ---------------------------------------------------------------
+  // Native apps are toggled via /api/settings flags; whether each is live is
+  // derived from /api/loop (the actual rotation). Custom apps are pushed to
+  // /api/custom?name=X ({text} to add/update, empty body to remove).
+  const NATIVE = [['Time','TIM'],['Date','DAT'],['Temperature','TEMP'],['Humidity','HUM'],['Battery','BAT']];
+
+  // Managed effect screens: custom apps with a persisted on/off state shared
+  // with claude-ticker.sh via /screens.json on the device (a map of
+  // enabled-name -> AWTRIX effect). The ticker re-pushes any enabled-but-missing
+  // entry, so toggling off here also tells the ticker to leave it off.
+  const MANAGED = [
+    ['matrix','Matrix'],['pong','PingPong'],['brick','BrickBreaker'],['radar','Radar'],
+    ['checker','Checkerboard'],['fireworks','Fireworks'],['plasmacloud','PlasmaCloud'],
+    ['ripple','Ripple'],['snake','Snake'],['pacifica','Pacifica'],['chase','TheaterChase'],
+    ['plasma','Plasma'],['swirlin','SwirlIn'],['swirlout','SwirlOut'],['eyes','LookingEyes'],
+    ['stars','TwinklingStars'],['waves','ColorWaves'],['countdown','Countdown'],
+    ['usage','ClaudeUsage'],
+  ];
+  // --- Screen previews -------------------------------------------------------
+  // Each managed screen gets a live 32x8 canvas approximating its effect, so the
+  // toggles show what they actually look like. Entirely cosmetic and local: no
+  // device calls, no image assets (which would bloat the device's flash) - the
+  // effects are redrawn procedurally, either as per-pixel shaders (x,y,t)->[r,g,b]
+  // or, where an effect is sprite-like, as a small draw routine on the 2d context.
+  // These are impressions of each effect, not pixel-exact copies of the firmware's.
+  const PW = 32, PH = 8;
+  const hash = n => { const s = Math.sin(n * 127.1) * 43758.5453; return s - Math.floor(s); };
+  const tri  = u => { u = ((u % 1) + 1) % 1; return u < .5 ? u * 2 : 2 - u * 2; };
+  function hsv(h, s, v) {
+    h = ((h % 1) + 1) % 1;
+    const i = Math.floor(h * 6), f = h * 6 - i;
+    const p = v * (1 - s), q = v * (1 - f * s), u = v * (1 - (1 - f) * s);
+    const c = [[v,u,p],[q,v,p],[p,v,u],[p,q,v],[u,p,v],[v,p,q]][i % 6];
+    return [c[0] * 255, c[1] * 255, c[2] * 255];
+  }
+  const swirl = dir => (x, y, t) => {
+    const dx = x - 16, dy = (y - 4) * 2, d = Math.hypot(dx, dy), a = Math.atan2(dy, dx);
+    return hsv(a / 6.283 + t * 0.1, 0.9, Math.max(0, Math.sin(a * 2 + dir * (d * 0.4 - t * 4))));
+  };
+
+  const SHADERS = {
+    Matrix: (x, y, t) => {
+      const head = (t * (3 + hash(x) * 7) + hash(x + 99) * 14) % 14, d = head - y;
+      if (d < 0 || d > 6) return [0, 0, 0];
+      return d < 1 ? [180, 255, 180] : [0, 255 * (1 - d / 6), 0];
+    },
+    Radar: (x, y, t) => {
+      const dx = x - 16, dy = (y - 4) * 2, d = Math.hypot(dx, dy);
+      if (d > 16) return [0, 0, 0];
+      const sweep = (t * 2) % 6.283 - 3.1416;
+      const behind = ((Math.atan2(dy, dx) - sweep) % 6.283 + 6.283) % 6.283;
+      const g = Math.max(0, 1 - behind * 0.9);
+      return [0, g * 255, g * 60];
+    },
+    Checkerboard: (x, y, t) =>
+      ((x >> 1) + (y >> 1) + Math.floor(t * 2)) % 2 === 0 ? hsv(t * 0.1, 0.7, 1) : [0, 0, 0],
+    Fireworks: (x, y, t) => {
+      let r = 0, g = 0, b = 0;
+      for (let i = 0; i < 3; i++) {
+        const cyc = 2.2, u = t + i * 0.8, tt = u % cyc, n = Math.floor(u / cyc);
+        const cx = 4 + hash(n * 3 + i) * 24, cy = 1 + hash(n * 5 + i + 1) * 5;
+        const d = Math.abs(Math.hypot(x - cx, (y - cy) * 2) - tt * 7);
+        if (d < 1.2) { const c = hsv(hash(n * 7 + i + 2), 0.8, Math.max(0, 1 - tt / cyc)); r += c[0]; g += c[1]; b += c[2]; }
+      }
+      return [Math.min(255, r), Math.min(255, g), Math.min(255, b)];
+    },
+    PlasmaCloud: (x, y, t) => {
+      const v = Math.sin(x * 0.25 + t) + Math.sin(y * 0.5 + t * 0.7) + Math.sin((x + y) * 0.5 + t * 0.4);
+      return hsv(0.62 + v * 0.05, 0.85, 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(v * 1.5)));
+    },
+    Ripple: (x, y, t) => {
+      const v = Math.sin(Math.hypot(x - 16, (y - 4) * 2) * 0.6 - t * 5);
+      return hsv(0.55 + v * 0.08, 0.8, Math.max(0, v) * 0.9 + 0.05);
+    },
+    Pacifica: (x, y, t) => {
+      const w = Math.sin(x * 0.25 - t * 1.2) + Math.sin(x * 0.11 + t * 0.8) + Math.sin(y * 0.7 + t * 0.5);
+      return hsv(0.45 + w * 0.02, 0.9, Math.min(1, 0.2 + 0.3 * (w + 3) / 6 + (y > 5 ? 0.15 : 0)));
+    },
+    TheaterChase: (x, y, t) =>
+      (x + Math.floor(t * 8)) % 3 === 0 ? hsv(Math.floor((x + y) / 4) * 0.12 + t * 0.1, 0.9, 1) : [0, 0, 0],
+    Plasma: (x, y, t) => {
+      const v = Math.sin(x * 0.3 + t * 2) + Math.sin(y * 0.6 - t * 1.5) + Math.sin((x + y) * 0.25 + t);
+      return hsv(v * 0.15 + t * 0.05, 1, 1);
+    },
+    SwirlIn: swirl(1),
+    SwirlOut: swirl(-1),
+    TwinklingStars: (x, y, t) => {
+      const id = x * 8 + y;
+      if (hash(id) > 0.12) return [0, 0, 0];
+      return hsv(0.6 * hash(id + 3), 0.25, Math.max(0, Math.sin(t * 2 + hash(id + 7) * 6.28)));
+    },
+    ColorWaves: (x, y, t) =>
+      hsv(x * 0.02 + t * 0.15 + Math.sin(y * 0.5 + t) * 0.03, 0.9, 0.5 + 0.5 * Math.sin(x * 0.3 - t * 2 + y * 0.2)),
+  };
+
+  const SPRITES = {
+    PingPong: (c, t) => {
+      const bx = Math.round(tri(t * 0.45) * 29) + 1, by = Math.round(tri(t * 0.31) * 6) + 1;
+      c.fillStyle = '#39d353';
+      c.fillRect(0, Math.max(0, Math.min(5, by - 1)), 1, 3);
+      c.fillRect(31, Math.max(0, Math.min(5, by - 1)), 1, 3);
+      c.fillStyle = '#fff'; c.fillRect(bx, by, 1, 1);
+    },
+    BrickBreaker: (c, t) => {
+      const cyc = 6, prog = (t % cyc) / cyc;
+      for (let r = 0; r < 2; r++) for (let bx = 0; bx < 32; bx += 4) {
+        if (hash(r * 32 + bx) < prog) continue;
+        c.fillStyle = `hsl(${(bx * 10 + r * 40) % 360} 90% 55%)`;
+        c.fillRect(bx, r, 3, 1);
+      }
+      const px = Math.round(tri(t * 0.4) * 26);
+      c.fillStyle = '#8b93a7'; c.fillRect(px, 7, 6, 1);
+      c.fillStyle = '#fff'; c.fillRect(Math.round(tri(t * 0.4 + .06) * 29) + 1, Math.round(tri(t * 0.62) * 4) + 2, 1, 1);
+    },
+    Snake: (c, t) => {
+      const cell = i => { const r = Math.floor(i / 32) % 8, k = i % 32; return [r % 2 ? 31 - k : k, r]; };
+      const head = Math.floor(t * 22);
+      const food = cell(Math.floor(head / 40) * 97 % 256);
+      c.fillStyle = '#e5534b'; c.fillRect(food[0], food[1], 1, 1);
+      for (let i = 0; i < 9; i++) {
+        const [x, y] = cell(((head - i) % 256 + 256) % 256);
+        c.fillStyle = i === 0 ? '#b7f5c0' : `rgba(57,211,83,${1 - i / 11})`;
+        c.fillRect(x, y, 1, 1);
+      }
+    },
+    LookingEyes: (c, t) => {
+      const blink = (t % 3.4) > 3.2;
+      const ox = Math.round(Math.sin(t * 1.3) * 2), oy = Math.round(Math.sin(t * 0.7) * 1);
+      for (const ex of [4, 20]) {
+        c.fillStyle = '#fff';
+        if (blink) { c.fillRect(ex, 4, 8, 1); continue; }
+        c.fillRect(ex, 1, 8, 6);
+        c.fillStyle = '#0d0f14'; c.fillRect(ex + 3 + ox, 3 + oy, 2, 2);
+      }
+    },
+    // Not a real AWTRIX effect - claude-ticker.sh's push_countdown scrolls this text.
+    Countdown: (c, t) => {
+      const msg = '365 DAYS TO GO';
+      c.font = '7px monospace'; c.textBaseline = 'top';
+      const w = c.measureText(msg).width;
+      const g = c.createLinearGradient(0, 0, PW, 0);
+      for (let i = 0; i <= 6; i++) g.addColorStop(i / 6, `hsl(${(i * 60 + t * 60) % 360} 95% 60%)`);
+      c.fillStyle = g;
+      c.fillText(msg, PW - ((t * 11) % (w + PW)), 0);
+    },
+    // Also not a real effect - claude-ticker.sh's push_usage scrolls the live
+    // Claude limits here. Unlike Countdown this preview can't mirror the real
+    // numbers (they need the Keychain token), so it shows representative ones;
+    // the two colours are the point, each tracking its own budget.
+    ClaudeUsage: (c, t) => {
+      const a = '4H26 ', b = '99%';
+      c.font = '7px monospace'; c.textBaseline = 'top';
+      const wa = c.measureText(a).width, w = wa + c.measureText(b).width;
+      const x = PW - ((t * 11) % (w + PW));
+      c.fillStyle = '#34C759'; c.fillText(a, x, 0);
+      c.fillStyle = '#FF9500'; c.fillText(b, x + wa, 0);
+    },
+  };
+
+  // One shared rAF loop drives every visible tile at ~12fps; idle while hidden.
+  const previews = [];
+  function collectPreviews() {
+    previews.length = 0;
+    for (const el of document.querySelectorAll('#managedToggles canvas.pv')) {
+      const ctx = el.getContext('2d');
+      previews.push({ ctx, effect: el.dataset.effect, img: ctx.createImageData(PW, PH) });
+    }
+  }
+  function drawPreview(p, t) {
+    const shader = SHADERS[p.effect];
+    if (!shader) {
+      p.ctx.clearRect(0, 0, PW, PH);
+      (SPRITES[p.effect] || (c => { c.fillStyle = '#232838'; c.fillRect(0, 3, PW, 2); }))(p.ctx, t);
+      return;
+    }
+    const d = p.img.data;
+    for (let y = 0; y < PH; y++) for (let x = 0; x < PW; x++) {
+      const rgb = shader(x, y, t), i = (y * PW + x) * 4;
+      d[i] = rgb[0]; d[i + 1] = rgb[1]; d[i + 2] = rgb[2]; d[i + 3] = 255;
+    }
+    p.ctx.putImageData(p.img, 0, 0);
+  }
+  let lastFrame = 0;
+  (function tick(now) {
+    requestAnimationFrame(tick);
+    if (document.hidden || now - lastFrame < 80) return;
+    lastFrame = now;
+    for (const p of previews) drawPreview(p, now / 1000);
+  })(0);
+
+  // name -> {effect, duration, speed?, target?} for the screens currently on.
+  // Absent = off. Per-screen config is stored alongside the effect so it travels
+  // with the on/off state; claude-ticker.sh parses the same file (see CLAUDE.md
+  // for why the schema must stay flat - its parser is pure bash).
+  let enabled = {};
+  let openCfg = null;               // name of the screen whose settings row is open
+  const DEFAULT_DUR = 8;
+  const DEFAULT_SPEED = { PingPong: -4.5 };   // effects that look better off-default
+
+  // Accept the legacy "name":"Effect" form so an older screens.json still loads.
+  const normalize = raw => Object.fromEntries(Object.entries(raw || {}).map(([k, v]) =>
+    [k, typeof v === 'string' ? { effect: v, duration: DEFAULT_DUR } : { duration: DEFAULT_DUR, ...v }]));
+
+  function daysTo(target) {
+    const d = Math.ceil((new Date(target + 'T00:00:00') - new Date()) / 86400000);
+    return isFinite(d) ? d : null;
+  }
+  // Mirror of claude-ticker.sh's push_countdown, so a target edit shows up at once
+  // instead of waiting for the next ~5min tick.
+  function countdownPayload(cfg) {
+    const dur = +cfg.duration || DEFAULT_DUR, days = daysTo(cfg.target || '');
+    if (days === null) return { text: '', rainbow: true, duration: dur };
+    if (days > 1)  return { text: days + ' DAYS TO GO', rainbow: true, duration: dur, scrollSpeed: 75 };
+    if (days === 1) return { text: '1 DAY LEFT!', rainbow: true, duration: dur, scrollSpeed: 75 };
+    return { text: "IT'S HERE!", rainbow: true, duration: dur, effect: 'Fireworks' };
+  }
+  // The usage screen's numbers come from the Keychain-backed OAuth call in
+  // claude-usage.sh, which this page can't make. So unlike countdown we can't
+  // mirror it: enabling just parks a grey placeholder and claude-ticker.sh
+  // overwrites it with real figures on its next pass (within ~5 min).
+  const usagePayload = cfg => ({
+    text: [{ t: '--H-- ', c: '#6B7280' }, { t: '--%', c: '#6B7280' }],
+    duration: +cfg.duration || DEFAULT_DUR, scrollSpeed: 75,
+  });
+  function payloadFor(name, cfg) {
+    if (name === 'countdown') return countdownPayload(cfg);
+    if (name === 'usage') return usagePayload(cfg);
+    const p = { effect: cfg.effect, text: '', duration: +cfg.duration || DEFAULT_DUR };
+    if (cfg.speed !== undefined && cfg.speed !== '' && cfg.speed !== null) p.effectSettings = { speed: +cfg.speed };
+    return p;
+  }
+
+  async function loadManaged() {
+    try {
+      const r = await fetch(base() + '/screens.json', { cache: 'no-store' });
+      enabled = normalize(r.ok ? await r.json() : {});
+    } catch (e) { enabled = {}; }
+  }
+  async function saveManaged() {
+    const fd = new FormData();
+    fd.append('data', new Blob([JSON.stringify(enabled)], { type: 'application/json' }), '/screens.json');
+    try { await fetch(base() + '/edit', { method: 'POST', body: fd }); }
+    catch (e) { toast('save failed: ' + e.message); }
+  }
+  // Push a screen's current config to the device (empty body = remove the app).
+  async function pushManaged(name, on) {
+    const opts = on
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payloadFor(name, enabled[name])) }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '' };
+    try { await fetch(base() + '/api/custom?name=' + encodeURIComponent(name), opts); } catch (e) {}
+  }
+  async function toggleManaged(name, effect) {
+    const on = !enabled[name];
+    if (on) {
+      enabled[name] = { effect, duration: DEFAULT_DUR };
+      if (DEFAULT_SPEED[effect] !== undefined) enabled[name].speed = DEFAULT_SPEED[effect];
+      // 'countdown' is not a real AWTRIX effect — its text is recomputed daily by
+      // claude-ticker.sh's push_countdown. Seed a target so it shows something.
+      if (name === 'countdown') enabled[name].target = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    } else {
+      delete enabled[name];
+      if (openCfg === name) openCfg = null;
+    }
+    await saveManaged();
+    await pushManaged(name, on);
+    toast(name + (on ? ' on' : ' off'));
+    setTimeout(refreshLoop, 400);
+  }
+  // Settings row: only offered for screens that are on, since screens.json stores
+  // config on the enabled entry and an off screen has no entry to hang it from.
+  function openScreenCfg(name) {
+    openCfg = (openCfg === name) ? null : name;
+    refreshLoop();
+  }
+  async function saveScreenCfg(name) {
+    const num = id => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    const dur = +num('cfgDur_' + name);
+    if (!(dur >= 1 && dur <= 3600)) { toast('duration must be 1–3600s'); return; }
+    enabled[name].duration = dur;
+    const sp = num('cfgSpeed_' + name);
+    if (sp === '') delete enabled[name].speed; else enabled[name].speed = +sp;
+    if (name === 'countdown') {
+      const tg = num('cfgTarget_' + name);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(tg)) { toast('target must be YYYY-MM-DD'); return; }
+      enabled[name].target = tg;
+    }
+    await saveManaged();
+    await pushManaged(name, true);
+    toast(name + ' saved');
+    setTimeout(refreshLoop, 400);
+  }
+
+  async function refreshLoop() {
+    try {
+      const [loopR, setR] = await Promise.all([fetch(base() + '/api/loop'), fetch(base() + '/api/settings')]);
+      const d = await loopR.json();
+      const s = await setR.json();
+      const keys = Object.keys(d).sort((a, b) => d[a] - d[b]);
+      document.getElementById('loop').textContent =
+        keys.length ? 'In rotation: ' + keys.join('  ·  ') : 'no screens in rotation';
+      // Native apps: their on/off SETTING only takes effect after a reboot, so the
+      // button colour reflects the stored setting (the intent), and a "*" + the
+      // Apply button flag any setting that differs from what's actually live now.
+      let pending = false;
+      document.getElementById('nativeToggles').innerHTML = NATIVE.map(([name, flag]) => {
+        const on = s[flag] === true;
+        const live = keys.some(k => k.toLowerCase() === name.toLowerCase());
+        if (on !== live) pending = true;
+        return `<button class="${on ? 'primary' : ''}" onclick="toggleNative('${flag}',${!on})">${name}${on ? ' ✓' : ''}${on !== live ? ' *' : ''}</button>`;
+      }).join('');
+      document.getElementById('applyNative').innerHTML = pending
+        ? `<button class="primary" onclick="rebootDevice()">Apply changes (reboot) *</button>` : '';
+      // Managed effect screens: orange when enabled (per /screens.json), grey when off.
+      document.getElementById('managedToggles').innerHTML = MANAGED.map(([name, effect]) => {
+        const on = !!enabled[name];
+        const cfg = enabled[name] || {};
+        let html = `<div class="tile">`
+          + `<button class="screen${on ? ' on' : ''}" title="${effect}" onclick="toggleManaged('${name}','${effect}')">`
+          + `<canvas class="pv" width="${PW}" height="${PH}" data-effect="${effect}"></canvas>`
+          + `<span class="nm">${name}${on ? ' ✓' : ''}</span></button>`
+          + (on ? `<button class="gear" title="Settings" onclick="openScreenCfg('${name}')">&#9881;</button>` : '')
+          + `</div>`;
+        if (on && openCfg === name) {
+          const days = name === 'countdown' ? daysTo(cfg.target || '') : null;
+          html += `<div class="cfg">`
+            + `<div class="cfgrow"><span>On screen for</span>`
+            + `<input type="number" id="cfgDur_${name}" min="1" max="3600" value="${+cfg.duration || DEFAULT_DUR}"> <span>sec</span></div>`
+            + (name === 'countdown'
+                ? `<div class="cfgrow"><span>Counting down to</span>`
+                  + `<input type="date" id="cfgTarget_${name}" value="${cfg.target || ''}"></div>`
+                  + `<div class="hint">${days === null ? 'set a target date' : days > 0 ? days + ' days remaining' : "target reached — shows IT'S HERE!"}</div>`
+              : name === 'usage'
+                ? `<div class="hint">Time left in the current 5&#8209;hour window, then percent left of the weekly quota. `
+                  + `Refreshed by claude-ticker.sh every ~5&nbsp;min; greys out if the fetch stops working. No effect speed — it's text, not an effect.</div>`
+                : `<div class="cfgrow"><span>Effect speed</span>`
+                  + `<input type="number" id="cfgSpeed_${name}" step="0.5" min="-10" max="10" placeholder="default" value="${cfg.speed ?? ''}">`
+                  + `</div><div class="hint">blank = firmware default; negative is slower</div>`)
+            + `<div class="btns" style="margin-top:10px"><button class="primary" onclick="saveScreenCfg('${name}')">Save</button>`
+            + `<button onclick="openScreenCfg('${name}')">Close</button></div>`
+            + `</div>`;
+        }
+        return html;
+      }).join('');
+      collectPreviews();   // innerHTML replaced the canvases, so re-bind contexts
+      // Custom chips = loop entries that are neither native nor managed.
+      const nativeLc = NATIVE.map(([n]) => n.toLowerCase());
+      const managedLc = MANAGED.map(([n]) => n.toLowerCase());
+      const custom = keys.filter(k => !nativeLc.includes(k.toLowerCase()) && !managedLc.includes(k.toLowerCase()));
+      document.getElementById('customChips').innerHTML = custom.map(name =>
+        `<button class="primary" onclick="removeNamed('${encodeURIComponent(name)}')">${name} ✕</button>`).join('');
+    } catch (e) {
+      document.getElementById('loop').textContent = 'loop unavailable';
+    }
+  }
+  // Native toggle: persist the setting (takes effect on next reboot) and re-render.
+  async function toggleNative(flag, on) {
+    try {
+      await fetch(base() + '/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ [flag]: on }) });
+      toast('saved — reboot to apply');
+    } catch (e) { toast('failed: ' + e.message); }
+    refreshLoop();
+  }
+  // Reboot to apply native-app changes, then re-push enabled effect screens
+  // (custom apps live in RAM and are wiped by the reboot).
+  async function rebootDevice() {
+    if (!confirm('Reboot the clock to apply screen changes? Takes ~15s.')) return;
+    try { await fetch(base() + '/api/reboot', { method: 'POST' }); } catch (e) {}
+    toast('rebooting…');
+    setTimeout(async () => {
+      for (const name in enabled) {
+        try {
+          await fetch(base() + '/api/custom?name=' + encodeURIComponent(name),
+            { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ effect: enabled[name], text: '', duration: 8 }) });
+        } catch (e) {}
+      }
+      refresh(); refreshLoop();
+    }, 16000);
+  }
+  // Remove a custom app by name (already URI-encoded). Empty body = delete.
+  async function removeNamed(enc) {
+    try {
+      const r = await fetch(base() + '/api/custom?name=' + enc,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '' });
+      toast(r.ok ? 'removed ' + decodeURIComponent(enc) : 'HTTP ' + r.status);
+      setTimeout(() => { refresh(); refreshLoop(); }, 400);
+    } catch (e) { toast('failed: ' + e.message); }
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch(base() + '/api/stats');
+      const d = await r.json();
+      document.getElementById('bri').value = d.bri ?? 120;
+      document.getElementById('briVal').textContent = d.bri ?? '?';
+      document.getElementById('stats').innerHTML = [
+        ['Brightness', d.bri], ['Battery', (d.bat ?? '?') + '%'],
+        ['Temp', (d.temp ?? '?') + '°C'], ['Humidity', (d.hum ?? '?') + '%'],
+        ['Light (lux)', d.lux], ['WiFi', (d.wifi_signal ?? '?') + ' dBm'],
+        ['Firmware', d.version], ['Current app', d.app],
+      ].map(([k, v]) => `<span>${k}</span><b>${v ?? '—'}</b>`).join('');
+    } catch (e) {
+      document.getElementById('stats').innerHTML = '<span>can\'t reach device &mdash; check IP / upload this page to the clock</span>';
+    }
+  }
+  refresh();
+  loadManaged().then(refreshLoop);
+</script>
+</body>
+</html>
