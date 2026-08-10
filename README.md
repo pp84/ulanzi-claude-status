@@ -315,3 +315,7 @@ in [`CLAUDE.md`](CLAUDE.md), which doubles as the architecture document.
 - [AWTRIX HTTP/MQTT API reference](https://blueforcer.github.io/awtrix3/#/api).
 
 Not affiliated with Ulanzi or Anthropic.
+
+## License
+
+[MIT](LICENSE) — use it however you like, no warranty.
