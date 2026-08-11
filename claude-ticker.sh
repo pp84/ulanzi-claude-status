@@ -87,6 +87,7 @@ push_countdown() {                 # push_countdown <target> <duration>
 # here can acquire a python3/network dependency and take the watchdog down.
 USAGE_CACHE="$HOME/.claude/.usage-cache.json"
 USAGE_MAX_AGE=1800                 # cache older than this is shown greyed out
+USAGE_WINDOW_SEC=18000             # length of the rate-limit window (5h)
 
 usage_color() {                    # usage_color <percent-remaining>
   if   [ "$1" -le 10 ]; then printf '#FF3B30'
@@ -97,7 +98,7 @@ usage_color() {                    # usage_color <percent-remaining>
 
 push_usage() {                     # push_usage <duration>
   local dur="${1:-$DEFAULT_DURATION}" raw sreset spct wpct ts nowsec left h m
-  local sleft wleft sc wc data v
+  local sleft wleft sc wc data v stale=0
   [ -r "$USAGE_CACHE" ] || return 0
   raw=$(cat "$USAGE_CACHE" 2>/dev/null) || return 0
   sreset=$(json_field "$raw" session_reset)
@@ -111,13 +112,24 @@ push_usage() {                     # push_usage <duration>
   done
 
   nowsec=$(date +%s)
-  left=$(( sreset - nowsec )); [ "$left" -lt 0 ] && left=0
+  if [ "$sreset" -eq 0 ]; then
+    # The API omits the `session` limit entirely until the 5h window is opened by
+    # the first request, so a zero reset with zero usage means a FULL window is
+    # available - not "0H00 left", which is what subtracting an epoch of 0 gave.
+    # A zero reset alongside recorded usage is unexplained (schema drift?), so
+    # that case is greyed out rather than claiming a fresh window.
+    left=$USAGE_WINDOW_SEC
+    [ "$spct" -gt 0 ] && stale=1
+  else
+    left=$(( sreset - nowsec )); [ "$left" -lt 0 ] && left=0
+  fi
   h=$(( left / 3600 )); m=$(( (left % 3600) / 60 ))
   sleft=$(( 100 - spct )); wleft=$(( 100 - wpct ))
   sc=$(usage_color "$sleft"); wc=$(usage_color "$wleft")
   # A cache that stopped refreshing (expired token, endpoint moved) would
   # otherwise show a confidently wrong countdown, so grey it rather than lie.
-  if [ "$ts" -gt 0 ] && [ $(( nowsec - ts )) -gt "$USAGE_MAX_AGE" ]; then
+  [ "$ts" -gt 0 ] && [ $(( nowsec - ts )) -gt "$USAGE_MAX_AGE" ] && stale=1
+  if [ "$stale" -eq 1 ]; then
     sc='#6B7280'; wc='#6B7280'
   fi
   # Two colour fragments: time left in the 5h window, then weekly percent left,
