@@ -35,15 +35,19 @@ EFFECTS = [
     ("stars", {"effect": "TwinklingStars", "text": ""}),
     ("countdown", {"text": "61 DAYS TO GO", "rainbow": True, "scrollSpeed": 75}),
     ("usage", {"text": [{"t": "3H24 ", "c": "#34C759"}, {"t": "71%", "c": "#34C759"}],
-               "scrollSpeed": 75}),
+               "noScroll": True}),
 ]
 
-# Held notifications - captured via /api/notify rather than the app loop.
+# Held notifications - captured via /api/notify rather than the app loop. The
+# progress bar is the 5h budget SPENT, so these mirror status-light.sh at a
+# representative 29% used.
 NOTIFICATIONS = [
     ("working", {"text": "WORKING", "color": "#2A7AFF", "hold": True,
-                 "stack": False, "textCase": 2}),
+                 "stack": False, "textCase": 2,
+                 "progress": 29, "progressC": "#34C759", "progressBC": "#1A1A1A"}),
     ("waiting", {"text": "WAITING", "color": "#FF2A2A", "hold": True,
-                 "stack": False, "textCase": 2}),
+                 "stack": False, "textCase": 2,
+                 "progress": 29, "progressC": "#34C759", "progressBC": "#1A1A1A"}),
 ]
 
 

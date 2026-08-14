@@ -36,6 +36,17 @@ STALE_MIN=30
 # stopped (finished or interrupted) - ignore it so the clock returns. Must be
 # comfortably longer than the gap between tool calls in a normal turn.
 WORK_STALE_SEC=300
+
+# The held WORKING/WAITING notifications carry a progress bar reading the current
+# 5h budget, from the cache claude-usage.sh writes. It shows the budget SPENT, so
+# the bar grows across the screen as you burn through the window and reddens as
+# it fills - a gauge that gets more alarming the longer it is, rather than one
+# that quietly shrinks away.
+# This is strictly decorative: anything unreadable, non-numeric or older than
+# USAGE_MAX_AGE just drops the bar - the status light must never be degraded by
+# the usage feature (same rule as the ticker's watchdog ordering).
+USAGE_CACHE="$HOME/.claude/.usage-cache.json"
+USAGE_MAX_AGE=1800
 # ================================================================
 
 STATE_DIR="$HOME/.claude/light-state"   # one file per session: its colour
@@ -103,10 +114,46 @@ color="green"
 [ "$have_blue" = 1 ] && color="blue"
 [ "$have_red" = 1 ] && color="red"
 
+# --- how much of the 5h budget is spent (for the notification's progress bar) ---
+# Read with grep alone, like claude-ticker.sh reads the same flat cache: no jq,
+# no python. Sets `bar` to the percent USED, or leaves it empty (= no bar).
+bar=""; barc=""
+json_field() {                     # json_field <object> <key>, flat objects only
+  printf '%s' "$1" \
+    | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*-?[0-9]+" \
+    | head -n1 | sed -E "s/^.*:[[:space:]]*//"
+}
+if [ -r "$USAGE_CACHE" ]; then
+  ucache=$(cat "$USAGE_CACHE" 2>/dev/null || echo)
+  upct=$(json_field "$ucache" session_pct)
+  uts=$(json_field "$ucache" ts)
+  case "$upct$uts" in
+    ''|*[!0-9]*) : ;;              # missing/half-written/schema drift: no bar
+    *)
+      if [ "$upct" -le 100 ] && [ $(( now - uts )) -le "$USAGE_MAX_AGE" ]; then
+        bar="$upct"                  # length = budget spent, so the bar fills up
+        if   [ "$bar" -ge 90 ]; then barc='#FF3B30'
+        elif [ "$bar" -ge 75 ]; then barc='#FF9500'
+        else                         barc='#34C759'
+        fi
+      fi
+      ;;
+  esac
+fi
+
 # --- only touch the device when the resulting colour actually changes ---
 # This is what makes the per-tool blue heartbeat cheap: it re-stamps the
 # state file but skips all curl calls while the colour stays blue.
-[ "$color" = "$(cat "$APPLIED" 2>/dev/null || echo)" ] && exit 0
+#
+# The bar has to redraw as the budget drains, so it forms part of the key -
+# bucketed to 5% (one extra push per ~15 min of a 5h window, driven by the
+# ticker's refresh) rather than every point, which would undo the dedup.
+# (green carries no bar, so its key stays a bare colour and idle stays a no-op.)
+key="$color"
+case "$color" in
+  red|blue) [ -n "$bar" ] && key="$color:$(( bar / 5 ))" ;;
+esac
+[ "$key" = "$(cat "$APPLIED" 2>/dev/null || echo)" ] && exit 0
 
 # --- serialise device writes so two hooks never collide ---
 # Portable lock (macOS has no flock): mkdir is atomic. Wait up to ~5s, then
@@ -119,6 +166,14 @@ done
 # --------------------------- AWTRIX ----------------------------
 aw() { [ -z "$AWTRIX_IP" ] && return 0; curl -s -m 2 "$@" >/dev/null 2>&1 || true; }
 
+# The fuel gauge under the word: AWTRIX draws `progress` (0-100) as a bar on the
+# bottom row of the notification. Emitted only when the usage cache gave us a
+# figure, so a missing/stale cache degrades to the plain notification.
+progress_json() {
+  [ -n "$bar" ] || return 0
+  printf ',"progress":%d,"progressC":"%s","progressBC":"#1A1A1A"' "$bar" "$barc"
+}
+
 awtrix_apply() {
   [ -z "$AWTRIX_IP" ] && return 0
   case "$1" in
@@ -127,14 +182,14 @@ awtrix_apply() {
       # stack:false so repeated reds REPLACE the current one instead of piling
       # up a queue that would need many dismisses to clear.
       aw "http://$AWTRIX_IP/api/notify" -H 'Content-Type: application/json' \
-         -d '{"text":"WAITING","color":"#FF2A2A","hold":true,"stack":false,"textCase":2}'
+         -d "{\"text\":\"WAITING\",\"color\":\"#FF2A2A\",\"hold\":true,\"stack\":false,\"textCase\":2$(progress_json)}"
       ;;
     blue)
       # held WORKING notification, symmetric with WAITING so it's always
       # visible (not a rotating page that any held red would mask). stack:false
       # means a later red REPLACES this one instead of queueing behind it.
       aw "http://$AWTRIX_IP/api/notify" -H 'Content-Type: application/json' \
-         -d '{"text":"WORKING","color":"#2A7AFF","hold":true,"stack":false,"textCase":2}'
+         -d "{\"text\":\"WORKING\",\"color\":\"#2A7AFF\",\"hold\":true,\"stack\":false,\"textCase\":2$(progress_json)}"
       ;;
     green)
       aw -X POST "http://$AWTRIX_IP/api/notify/dismiss"     # clear WORKING/WAITING
@@ -145,6 +200,6 @@ awtrix_apply() {
 
 # ---------------------------- drive ----------------------------
 awtrix_apply "$color"
-printf '%s' "$color" > "$APPLIED"
+printf '%s' "$key" > "$APPLIED"
 
 exit 0

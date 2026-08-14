@@ -11,6 +11,12 @@ stopped and is waiting on you.
 | ![WAITING](docs/screens/waiting.gif) | **WAITING** — a session needs your input or a permission decision |
 | _(clock face)_ | everything is idle; the normal app rotation resumes |
 
+Both states carry a bar along the bottom row: a fuel gauge for your current
+5-hour Claude Code budget that grows from the left as you spend it, turning
+amber at 75% and red at 90%. So a glance tells you not just that Claude is busy
+but how close you are to running out. (It appears once the `usage` screen's data
+is available — see below — and is simply omitted otherwise.)
+
 It is **multi-session aware**: every session's state is tracked separately and
 the clock shows the single most urgent one — `red > blue > green` — so a red
 WAITING in one terminal is never hidden by another terminal that is busy.
@@ -39,9 +45,10 @@ Mac and pushed as text:
 - **`countdown`** — days remaining until a target date, scrolling in rainbow.
   Rolls through `N DAYS TO GO` → `1 DAY LEFT!` → `IT'S HERE!` (over a fireworks
   background on the day itself).
-- **`usage`** — time left in your current 5-hour Claude Code window, and percent
-  left of the weekly quota. Each figure is shaded green / amber / red by *its
-  own* remaining budget, and goes grey rather than lying if the data goes stale.
+- **`usage`** — your Claude Code limits at a glance, e.g. `2H15 85%`: time until
+  the current 5-hour window resets, and how much of that window's budget is still
+  unspent. Shaded green / amber / red by what's left, and goes grey rather than
+  lying if the data goes stale. It sits still rather than scrolling.
 
 Which screens are enabled, how long each stays up, and how fast it animates are
 all controlled from the bundled web panel (below) — no redeploy needed.

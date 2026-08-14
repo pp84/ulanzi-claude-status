@@ -78,8 +78,14 @@ push_countdown() {                 # push_countdown <target> <duration>
 }
 
 # "usage" is the other non-effect managed screen (see countdown above): it shows
-# time left in the current 5h window and percent left of the weekly quota, so its
-# text also has to be recomputed on every tick rather than pushed once.
+# time left in the current 5h window and the percent of that window's BUDGET
+# still unspent, so its text also has to be recomputed on every tick rather than
+# pushed once.
+#
+# The session budget is the number that decides whether you can keep working now;
+# the clock alone ("2H14") only says when the window rolls over. The weekly quota
+# is deliberately NOT shown: in practice it is never close to spent, and dropping
+# it keeps the line short enough to sit still ("noScroll") rather than scrolling.
 #
 # The numbers come from ~/.claude/.usage-cache.json, written by claude-usage.sh.
 # This side only ever READS that flat cache with json_field - the network call,
@@ -97,17 +103,16 @@ usage_color() {                    # usage_color <percent-remaining>
 }
 
 push_usage() {                     # push_usage <duration>
-  local dur="${1:-$DEFAULT_DURATION}" raw sreset spct wpct ts nowsec left h m
-  local sleft wleft sc wc data v stale=0
+  local dur="${1:-$DEFAULT_DURATION}" raw sreset spct ts nowsec left h m
+  local sleft sc data v stale=0
   [ -r "$USAGE_CACHE" ] || return 0
   raw=$(cat "$USAGE_CACHE" 2>/dev/null) || return 0
   sreset=$(json_field "$raw" session_reset)
   spct=$(json_field "$raw" session_pct)
-  wpct=$(json_field "$raw" weekly_pct)
   ts=$(json_field "$raw" ts)
   # A half-written or schema-changed cache must not render as garbage on the
   # clock; anything non-numeric just leaves the previous app in place.
-  for v in "$sreset" "$spct" "$wpct" "$ts"; do
+  for v in "$sreset" "$spct" "$ts"; do
     case "$v" in ''|*[!0-9]*) return 0 ;; esac
   done
 
@@ -124,18 +129,17 @@ push_usage() {                     # push_usage <duration>
     left=$(( sreset - nowsec )); [ "$left" -lt 0 ] && left=0
   fi
   h=$(( left / 3600 )); m=$(( (left % 3600) / 60 ))
-  sleft=$(( 100 - spct )); wleft=$(( 100 - wpct ))
-  sc=$(usage_color "$sleft"); wc=$(usage_color "$wleft")
+  sleft=$(( 100 - spct ))
+  sc=$(usage_color "$sleft")
   # A cache that stopped refreshing (expired token, endpoint moved) would
   # otherwise show a confidently wrong countdown, so grey it rather than lie.
   [ "$ts" -gt 0 ] && [ $(( nowsec - ts )) -gt "$USAGE_MAX_AGE" ] && stale=1
-  if [ "$stale" -eq 1 ]; then
-    sc='#6B7280'; wc='#6B7280'
-  fi
-  # Two colour fragments: time left in the 5h window, then weekly percent left,
-  # each shaded by how much of ITS OWN budget remains.
-  data=$(printf '{"text":[{"t":"%dH%02d ","c":"%s"},{"t":"%d%%","c":"%s"}],"duration":%s,"scrollSpeed":75}' \
-           "$h" "$m" "$sc" "$wleft" "$wc" "$dur")
+  [ "$stale" -eq 1 ] && sc='#6B7280'
+  # Two colour fragments, both shaded by the session budget: time left in the 5h
+  # window, then the budget left in it. Short enough for the 32px matrix, so
+  # noScroll pins it still instead of scrolling a line that already fits.
+  data=$(printf '{"text":[{"t":"%dH%02d ","c":"%s"},{"t":"%d%%","c":"%s"}],"duration":%s,"noScroll":true}' \
+           "$h" "$m" "$sc" "$sleft" "$sc" "$dur")
   curl -s --max-time 3 -X POST "http://$AWTRIX_IP/api/custom?name=usage" \
     -H 'Content-Type: application/json' \
     -d "$data" >/dev/null 2>&1 || true
