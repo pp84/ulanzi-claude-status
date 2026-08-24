@@ -45,6 +45,14 @@ AWTRIX_IP="${AWTRIX_IP:-192.168.1.100}"
 # to a top-level key instead - as `speed` is, rather than an `effectSettings` object.
 DEFAULT_DURATION=8
 
+# Every screen this ticker is allowed to manage. Mirrors control.html's MANAGED
+# array - keep the two in sync when a screen is added. reassert_screens uses it
+# to bound the *removal* pass: a name in here that is live in /api/loop but not
+# in /screens.json is a leftover and gets deleted, while any other custom app in
+# the loop (hand-pushed, or another tool's) is left strictly alone.
+CATALOG="matrix pong brick radar checker fireworks plasmacloud ripple snake \
+pacifica chase plasma swirlin swirlout eyes stars waves countdown usage"
+
 # json_field <object> <key> - value of "key" from a flat JSON object, else empty.
 json_field() {
   printf '%s' "$1" \
@@ -156,9 +164,14 @@ reassert_screens() {
   [ -z "$loop" ] && return 0                     # device unreachable: retry next tick
   echo "$now" > "$stamp"
   cfg=$(curl -s --max-time 3 "http://$AWTRIX_IP/screens.json")
+  # /screens.json is the ONLY store of which screens are on. If it is missing or
+  # unreadable we do nothing at all rather than inventing a set: an earlier
+  # version fell back to "enable everything here", which pushed the full effect
+  # catalogue into the loop, and since the reconcile below is name-scoped those
+  # extras then outlived every toggle in control.html. No config = no opinion.
   case "$cfg" in
-    *'{'*) : ;;                                  # looks like our config: use it
-    *) cfg='{"matrix":"Matrix","pong":"PingPong","brick":"BrickBreaker","radar":"Radar","checker":"Checkerboard","fireworks":"Fireworks","plasmacloud":"PlasmaCloud","ripple":"Ripple","snake":"Snake","pacifica":"Pacifica","chase":"TheaterChase","plasma":"Plasma","swirlin":"SwirlIn","swirlout":"SwirlOut","eyes":"LookingEyes","stars":"TwinklingStars","waves":"ColorWaves","countdown":"Countdown","usage":"ClaudeUsage"}' ;;  # missing/404: sane default (full effect set)
+    *'{'*) : ;;
+    *) return 0 ;;
   esac
   # Split the config into one "name": <value> entry per line, where <value> is
   # either a bare "Effect" string (legacy) or a flat {...} object. The [^{}]*
@@ -197,6 +210,20 @@ reassert_screens() {
       -d "$data" >/dev/null 2>&1 || true
   done < <(printf '%s' "$cfg" \
             | grep -oE '"[A-Za-z0-9_]+"[[:space:]]*:[[:space:]]*(\{[^{}]*\}|"[A-Za-z0-9_]+")')
+
+  # Reconcile the other direction: drop any catalogue screen still live in the
+  # loop that /screens.json no longer enables. Without this the ticker could only
+  # ever add, so a screen switched off in control.html while the device was
+  # unreachable - or pushed by an older build - stayed in the rotation until the
+  # next reboot, and the loop drifted away from the toggles. Empty POST body
+  # deletes the custom app. Names are matched with their quotes ("plasma" never
+  # matches "plasmacloud") and only CATALOG names are ever touched.
+  for name in $CATALOG; do
+    case "$loop" in *"\"$name\""*) : ;; *) continue ;; esac   # not live: nothing to drop
+    case "$cfg"  in *"\"$name\""*) continue ;; esac           # still enabled: keep
+    curl -s --max-time 3 -X POST "http://$AWTRIX_IP/api/custom?name=$name" \
+      -H 'Content-Type: application/json' -d '' >/dev/null 2>&1 || true
+  done
 }
 # Refresh the rate-limit cache before pushing screens, so the usage screen shows
 # this tick's numbers rather than lagging one push behind. Self-throttled to once
